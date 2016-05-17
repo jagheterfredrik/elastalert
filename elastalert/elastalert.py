@@ -16,15 +16,9 @@ from socket import error
 import argparse
 import dateutil.tz
 import kibana
-import yaml
 from alerts import DebugAlerter
-from auth import Auth
-from config import get_rule_hashes
-from config import load_configuration
-from config import load_rules
+import config
 from croniter import croniter
-from elasticsearch import RequestsHttpConnection
-from elasticsearch.client import Elasticsearch
 from elasticsearch.exceptions import ElasticsearchException
 from enhancements import DropMatchException
 from util import cronite_datetime_to_timestamp
@@ -41,6 +35,8 @@ from util import ts_now
 from util import ts_to_dt
 from util import unix_to_dt
 from util import add_raw_postfix
+from util import build_es_conn_config
+from util import new_elasticsearch
 
 
 class ElastAlerter():
@@ -70,10 +66,11 @@ class ElastAlerter():
         parser.add_argument('--pin_rules', action='store_true', dest='pin_rules', help='Stop ElastAlert from monitoring config file changes')
         parser.add_argument('--es_debug', action='store_true', dest='es_debug', help='Enable verbose logging from Elasticsearch queries')
         parser.add_argument('--es_debug_trace', action='store', dest='es_debug_trace', help='Enable logging from Elasticsearch queries as curl command. Queries will be logged to file')
-        self.args = parser.parse_args(args)
+
+        return parser.parse_args(args)
 
     def __init__(self, args):
-        self.parse_args(args)
+        self.args = self.parse_args(args)
         self.debug = self.args.debug
         self.verbose = self.args.verbose
 
@@ -91,10 +88,9 @@ class ElastAlerter():
             tracer.setLevel(logging.INFO)
             tracer.addHandler(logging.FileHandler(self.args.es_debug_trace))
 
-        self.conf = load_rules(self.args)
+        self.conf = config.load_rules(self.args)
         self.max_query_size = self.conf['max_query_size']
-        self.rules = self.conf['rules']
-        self.writeback_index = self.conf['writeback_index']
+        self.es_metadata_index = self.conf['es_metadata_index']
         self.run_every = self.conf['run_every']
         self.alert_time_limit = self.conf['alert_time_limit']
         self.old_query_limit = self.conf['old_query_limit']
@@ -109,78 +105,17 @@ class ElastAlerter():
         self.current_es_addr = None
         self.buffer_time = self.conf['buffer_time']
         self.silence_cache = {}
-        self.rule_hashes = get_rule_hashes(self.conf, self.args.rule)
         self.starttime = self.args.start
-        self.disabled_rules = []
+        self.disabled_rules = set()
 
-        self.es_conn_config = self.build_es_conn_config(self.conf)
+        self.es_conn_config = build_es_conn_config(self.conf)
 
-        self.writeback_es = self.new_elasticsearch(self.es_conn_config)
+        self.writeback_es = new_elasticsearch(self.es_conn_config)
 
-        for rule in self.rules:
-            self.init_rule(rule)
+        self.rules = dict((rule['name'], self.init_rule(rule, True)) for rule in self.conf['rules'])
 
         if self.args.silence:
             self.silence()
-
-    @staticmethod
-    def new_elasticsearch(es_conn_conf):
-        """ returns an Elasticsearch instance configured using an es_conn_config """
-        auth = Auth()
-        es_conn_conf['http_auth'] = auth(host=es_conn_conf['es_host'],
-                                         username=es_conn_conf['es_username'],
-                                         password=es_conn_conf['es_password'],
-                                         aws_region=es_conn_conf['aws_region'],
-                                         boto_profile=es_conn_conf['boto_profile'])
-
-        return Elasticsearch(host=es_conn_conf['es_host'],
-                             port=es_conn_conf['es_port'],
-                             url_prefix=es_conn_conf['es_url_prefix'],
-                             use_ssl=es_conn_conf['use_ssl'],
-                             connection_class=RequestsHttpConnection,
-                             http_auth=es_conn_conf['http_auth'],
-                             timeout=es_conn_conf['es_conn_timeout'],
-                             send_get_body_as=es_conn_conf['send_get_body_as'])
-
-    @staticmethod
-    def build_es_conn_config(conf):
-        """ Given a conf dictionary w/ raw config properties 'use_ssl', 'es_host', 'es_port'
-        'es_username' and 'es_password', this will return a new dictionary
-        with properly initialized values for 'es_host', 'es_port', 'use_ssl' and 'http_auth' which
-        will be a basicauth username:password formatted string """
-        parsed_conf = {}
-        parsed_conf['use_ssl'] = False
-        parsed_conf['http_auth'] = None
-        parsed_conf['es_username'] = None
-        parsed_conf['es_password'] = None
-        parsed_conf['aws_region'] = None
-        parsed_conf['boto_profile'] = None
-        parsed_conf['es_host'] = conf['es_host']
-        parsed_conf['es_port'] = conf['es_port']
-        parsed_conf['es_url_prefix'] = ''
-        parsed_conf['es_conn_timeout'] = 10
-        parsed_conf['send_get_body_as'] = conf.get('es_send_get_body_as', 'GET')
-
-        if 'es_username' in conf:
-            parsed_conf['es_username'] = conf['es_username']
-            parsed_conf['es_password'] = conf['es_password']
-
-        if 'aws_region' in conf:
-            parsed_conf['aws_region'] = conf['aws_region']
-
-        if 'boto_profile' in conf:
-            parsed_conf['boto_profile'] = conf['boto_profile']
-
-        if 'use_ssl' in conf:
-            parsed_conf['use_ssl'] = conf['use_ssl']
-
-        if 'es_conn_timeout' in conf:
-            parsed_conf['es_conn_timeout'] = conf['es_conn_timeout']
-
-        if 'es_url_prefix' in conf:
-            parsed_conf['es_url_prefix'] = conf['es_url_prefix']
-
-        return parsed_conf
 
     @staticmethod
     def get_index(rule, starttime=None, endtime=None):
@@ -385,7 +320,7 @@ class ElastAlerter():
                 continue
 
             # Remember the new data's IDs
-            rule['processed_hits'][event['_id']] = lookup_es_key(event, rule['timestamp_field'])
+            rule['processed_hits'][event['_id']] = lookup_es_key(event, rule.get('timestamp_field'))
             new_events.append(event)
 
         return new_events
@@ -453,7 +388,7 @@ class ElastAlerter():
                  'sort': {'@timestamp': {'order': 'desc'}}}
         try:
             if self.writeback_es:
-                res = self.writeback_es.search(index=self.writeback_index, doc_type='elastalert_status',
+                res = self.writeback_es.search(index=self.es_metadata_index, doc_type='elastalert_status',
                                                size=1, body=query, _source_include=['endtime', 'rule_name'])
                 if res['hits']['hits']:
                     endtime = ts_to_dt(res['hits']['hits'][0]['_source']['endtime'])
@@ -512,9 +447,9 @@ class ElastAlerter():
         """
         run_start = time.time()
 
-        rule_es_conn_config = self.build_es_conn_config(rule)
-        self.current_es = self.new_elasticsearch(rule_es_conn_config)
-        self.current_es_addr = (rule['es_host'], rule['es_port'])
+        rule_es_conn_config = build_es_conn_config(rule)
+        self.current_es = new_elasticsearch(rule_es_conn_config)
+        self.current_es_addr = (rule.get('es_host'), rule.get('es_port'))
 
         # If there are pending aggregate matches, try processing them
         for x in range(len(rule['agg_matches'])):
@@ -616,9 +551,8 @@ class ElastAlerter():
 
         # Set rule to either a blank template or existing rule with same name
         if not new:
-            for rule in self.rules:
-                if rule['name'] == new_rule['name']:
-                    break
+            if new_rule['name'] in self.rules:
+                rule = self.rules[new_rule['name']]
             else:
                 logging.warning("Couldn't find existing rule %s, starting from scratch" % (new_rule['name']))
                 rule = blank_rule
@@ -637,65 +571,33 @@ class ElastAlerter():
         return new_rule
 
     def load_rule_changes(self):
-        ''' Using the modification times of rule config files, syncs the running rules
-        to match the files in rules_folder by removing, adding or reloading rules. '''
-        new_rule_hashes = get_rule_hashes(self.conf, self.args.rule)
+        candidates = config.load_rules(self.args)['rules']
+        candidate_names = [c.get('name') for c in candidates]
 
-        # Check each current rule for changes
-        for rule_file, hash_value in self.rule_hashes.iteritems():
-            if rule_file not in new_rule_hashes:
-                # Rule file was deleted
-                elastalert_logger.info('Rule file %s not found, stopping rule execution' % (rule_file))
-                self.rules = [rule for rule in self.rules if rule['rule_file'] != rule_file]
-                continue
-            if hash_value != new_rule_hashes[rule_file]:
-                # Rule file was changed, reload rule
-                try:
-                    new_rule = load_configuration(rule_file, self.conf)
-                except EAException as e:
-                    message = 'Could not load rule %s: %s' % (rule_file, e)
-                    self.handle_error(message)
-                    # Want to send email to address specified in the rule. Try and load the YAML to find it.
-                    with open(rule_file) as f:
-                        try:
-                            rule_yaml = yaml.load(f)
-                        except yaml.scanner.ScannerError:
-                            self.send_notification_email(exception=e)
-                            continue
+        # Remove old
+        removed = set(self.rules.keys()) - set(candidate_names)
+        for r in removed:
+            del self.rules[r]
+            if r in self.disabled_rules:
+                del self.disabled_rules[r]
 
-                    self.send_notification_email(exception=e, rule=rule_yaml)
-                    continue
-                elastalert_logger.info("Reloading configuration for rule %s" % (rule_file))
+        # Update existing
+        def _update_rules(rule):
+            if rule['name'] in self.rules:
+                if self.rules[rule['name']]['hash'] != rule['hash']:
+                    self.rules[rule['name']] = self.init_rule(rule, False)
+                    if rule['name'] in self.disabled_rules:
+                        del self.disabled_rules[rule['name']]
+                return False
+            return True
 
-                # Re-enable if rule had been disabled
-                for disabled_rule in self.disabled_rules:
-                    if disabled_rule['name'] == new_rule['name']:
-                        self.rules.append(disabled_rule)
-                        self.disabled_rules.remove(disabled_rule)
-                        break
+        candidates = filter(_update_rules, candidates)
 
-                # Initialize the rule that matches rule_file
-                self.rules = [rule if rule['rule_file'] != rule_file else self.init_rule(new_rule, False) for rule in self.rules]
+        # Add new
+        for c in candidates:
+            self.rules[c['name']] = self.init_rule(c)
 
-                # If the rule failed to load previously, it needs to be added to self.rules
-                if new_rule['name'] not in [rule['name'] for rule in self.rules]:
-                    self.rules.append(self.init_rule(new_rule))
-
-        # Load new rules
-        if not self.args.rule:
-            for rule_file in set(new_rule_hashes.keys()) - set(self.rule_hashes.keys()):
-                try:
-                    new_rule = load_configuration(rule_file, self.conf)
-                    if new_rule['name'] in [rule['name'] for rule in self.rules]:
-                        raise EAException("A rule with the name %s already exists" % (new_rule['name']))
-                except EAException as e:
-                    self.handle_error('Could not load rule %s: %s' % (rule_file, e))
-                    self.send_notification_email(exception=e, rule_file=rule_file)
-                    continue
-                elastalert_logger.info('Loaded new rule %s' % (rule_file))
-                self.rules.append(self.init_rule(new_rule))
-
-        self.rule_hashes = new_rule_hashes
+        return self.rules
 
     def start(self):
         """ Periodically go through each rule and run it """
@@ -733,14 +635,18 @@ class ElastAlerter():
         """ Run each rule one time """
         # If writeback_es errored, it's disabled until the next query cycle
         if not self.writeback_es:
-            self.writeback_es = self.new_elasticsearch(self.es_conn_config)
+            self.writeback_es = new_elasticsearch(self.es_conn_config)
 
         self.send_pending_alerts()
 
+        print 'run!', len(self.rules)
+
         next_run = datetime.datetime.utcnow() + self.run_every
 
-        for rule in self.rules:
+        for rule in self.rules.values():
             # Set endtime based on the rule's delay
+            if rule['name'] in self.disabled_rules:
+                continue
             delay = rule.get('query_delay')
             if hasattr(self.args, 'end') and self.args.end:
                 endtime = ts_to_dt(self.args.end)
@@ -840,8 +746,8 @@ class ElastAlerter():
                    'dashboard': db_js}
 
         # Upload
-        rule_es_conn_config = self.build_es_conn_config(rule)
-        es = self.new_elasticsearch(rule_es_conn_config)
+        rule_es_conn_config = build_es_conn_config(rule)
+        es = new_elasticsearch(rule_es_conn_config)
 
         res = es.create(index='kibana-int',
                         doc_type='temp',
@@ -856,8 +762,8 @@ class ElastAlerter():
 
     def get_dashboard(self, rule, db_name):
         """ Download dashboard which matches use_kibana_dashboard from elasticsearch. """
-        rule_es_conn_config = self.build_es_conn_config(rule)
-        es = self.new_elasticsearch(rule_es_conn_config)
+        rule_es_conn_config = build_es_conn_config(rule)
+        es = new_elasticsearch(rule_es_conn_config)
         if not db_name:
             raise EAException("use_kibana_dashboard undefined")
         query = {'query': {'term': {'_id': db_name}}}
@@ -1018,7 +924,7 @@ class ElastAlerter():
             body['@timestamp'] = dt_to_ts(ts_now())
         if self.writeback_es:
             try:
-                res = self.writeback_es.create(index=self.writeback_index,
+                res = self.writeback_es.create(index=self.es_metadata_index,
                                                doc_type=doc_type, body=body)
                 return res
             except ElasticsearchException as e:
@@ -1039,7 +945,7 @@ class ElastAlerter():
                  'sort': {'alert_time': {'order': 'asc'}}}
         if self.writeback_es:
             try:
-                res = self.writeback_es.search(index=self.writeback_index,
+                res = self.writeback_es.search(index=self.es_metadata_index,
                                                doc_type='elastalert',
                                                body=query,
                                                size=1000)
@@ -1062,17 +968,15 @@ class ElastAlerter():
                 # Malformed alert, drop it
                 continue
 
-            # Find original rule
-            for rule in self.rules:
-                if rule['name'] == rule_name:
-                    break
+            if rule_name in self.rules:
+                rule = self.rules[rule_name]
             else:
                 # Original rule is missing, keep alert for later if rule reappears
                 continue
 
             # Set current_es for top_count_keys query
-            rule_es_conn_config = self.build_es_conn_config(rule)
-            self.current_es = self.new_elasticsearch(rule_es_conn_config)
+            rule_es_conn_config = build_es_conn_config(rule)
+            self.current_es = new_elasticsearch(rule_es_conn_config)
             self.current_es_addr = (rule['es_host'], rule['es_port'])
 
             # Send the alert unless it's a future alert
@@ -1088,14 +992,14 @@ class ElastAlerter():
 
                 # Delete it from the index
                 try:
-                    self.writeback_es.delete(index=self.writeback_index,
+                    self.writeback_es.delete(index=self.es_metadata_index,
                                              doc_type='elastalert',
                                              id=_id)
                 except:  # TODO: Give this a more relevant exception, try:except: is evil.
                     self.handle_error("Failed to delete alert %s at %s" % (_id, alert_time))
 
         # Send in memory aggregated alerts
-        for rule in self.rules:
+        for rule in self.rules.values():
             if rule['agg_matches']:
                 if ts_now() > rule['aggregate_alert_time']:
                     self.alert(rule['agg_matches'], rule)
@@ -1109,13 +1013,13 @@ class ElastAlerter():
         matches = []
         if self.writeback_es:
             try:
-                res = self.writeback_es.search(index=self.writeback_index,
+                res = self.writeback_es.search(index=self.es_metadata_index,
                                                doc_type='elastalert',
                                                body=query,
                                                size=self.max_aggregation)
                 for match in res['hits']['hits']:
                     matches.append(match['_source'])
-                    self.writeback_es.delete(index=self.writeback_index,
+                    self.writeback_es.delete(index=self.es_metadata_index,
                                              doc_type='elastalert',
                                              id=match['_id'])
             except (KeyError, ElasticsearchException) as e:
@@ -1203,7 +1107,7 @@ class ElastAlerter():
             exit(1)
 
         # With --rule, self.rules will only contain that specific rule
-        rule_name = self.rules[0]['name']
+        rule_name = self.rules.values()[0]['name']
 
         try:
             unit, num = self.args.silence.split('=')
@@ -1246,7 +1150,7 @@ class ElastAlerter():
 
         if self.writeback_es:
             try:
-                res = self.writeback_es.search(index=self.writeback_index, doc_type='silence',
+                res = self.writeback_es.search(index=self.es_metadata_index, doc_type='silence',
                                                size=1, body=query, _source_include=['until', 'exponent'])
             except ElasticsearchException as e:
                 self.handle_error("Error while querying for alert silence status: %s" % (e), {'rule': rule_name})
@@ -1265,7 +1169,7 @@ class ElastAlerter():
     def handle_error(self, message, data=None):
         ''' Logs message at error level and writes message, data and traceback to Elasticsearch. '''
         if not self.writeback_es:
-            self.writeback_es = self.new_elasticsearch(self.es_conn_config)
+            self.writeback_es = new_elasticsearch(self.es_conn_config)
 
         logging.error(message)
         body = {'message': message}
@@ -1280,8 +1184,7 @@ class ElastAlerter():
         logging.error(traceback.format_exc())
         self.handle_error('Uncaught exception running rule %s: %s' % (rule['name'], exception), {'rule': rule['name']})
         if self.disable_rules_on_error:
-            self.rules = [running_rule for running_rule in self.rules if running_rule['name'] != rule['name']]
-            self.disabled_rules.append(rule)
+            self.disabled_rules.add(rule['name'])
             elastalert_logger.info('Rule %s disabled', rule['name'])
         if self.notify_email:
             self.send_notification_email(exception=exception, rule=rule)

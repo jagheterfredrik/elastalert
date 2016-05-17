@@ -129,7 +129,7 @@ it ran the query for a given rule, and periodically query from that time until t
 this field is a nested unit of time, such as ``minutes: 5``. This is how time is defined in every ElastAlert
 configuration.
 
-``writeback_index``: The index on ``es_host`` to use.
+``es_metadata_index``: The index on ``es_host`` to use.
 
 ``max_query_size``: The maximum number of documents that will be downloaded from Elasticsearch in a single query. The
 default is 10,000, and if you expect to get near this number, consider using ``use_count_query`` for the rule. If this
