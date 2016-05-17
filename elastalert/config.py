@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import copy
 import datetime
-import hashlib
 import logging
 import os
 
@@ -10,9 +9,9 @@ import enhancements
 import jsonschema
 import ruletypes
 import yaml
-import yaml.scanner
-from opsgenie import OpsGenieAlerter
 from staticconf.loader import yaml_loader
+from opsgenie import OpsGenieAlerter
+from util import dict_hash
 from util import dt_to_ts
 from util import dt_to_ts_with_format
 from util import dt_to_unix
@@ -22,12 +21,14 @@ from util import ts_to_dt
 from util import ts_to_dt_with_format
 from util import unix_to_dt
 from util import unixms_to_dt
+from util import build_es_conn_config
+from util import new_elasticsearch
 
 # schema for rule yaml
 rule_schema = jsonschema.Draft4Validator(yaml.load(open(os.path.join(os.path.dirname(__file__), 'schema.yaml'))))
 
 # Required global (config.yaml) and local (rule.yaml)  configuration options
-required_globals = frozenset(['run_every', 'rules_folder', 'es_host', 'es_port', 'writeback_index', 'buffer_time'])
+required_globals = frozenset(['run_every', 'es_host', 'es_port', 'es_metadata_index', 'buffer_time'])
 required_locals = frozenset(['alert', 'type', 'name', 'index'])
 
 # Used to map the names of rules to their classes
@@ -74,21 +75,29 @@ def get_module(module_name):
 
 
 def load_configuration(filename, conf, args=None):
+    try:
+        rule = yaml_loader(filename)
+    except yaml.YAMLError as e:
+        raise EAException('Could not parse file %s: %s' % (filename, e))
+
+    return load_rule(rule, conf, args)
+
+
+def load_rule(rule, conf, args=None):
     """ Load a yaml rule file and fill in the relevant fields with objects.
 
     :param filename: The name of a rule configuration file.
     :param conf: The global configuration dictionary, used for populating defaults.
     :return: The rule configuration, a dictionary.
     """
-    try:
-        rule = yaml_loader(filename)
-    except yaml.scanner.ScannerError as e:
-        raise EAException('Could not parse file %s: %s' % (filename, e))
-
-    rule['rule_file'] = filename
+    add_rule_hash(rule)
     load_options(rule, conf, args)
     load_modules(rule, args)
     return rule
+
+
+def add_rule_hash(rule):
+    rule['hash'] = dict_hash(rule)
 
 
 def load_options(rule, conf, args=None):
@@ -354,10 +363,9 @@ def load_rules(args):
     :param args: The parsed arguments to ElastAlert
     :return: The global configuration, a dictionary.
     """
-    names = []
+
     filename = args.config
     conf = yaml_loader(filename)
-    use_rule = args.rule
 
     # Make sure we have all required globals
     if required_globals - frozenset(conf.keys()):
@@ -365,6 +373,7 @@ def load_rules(args):
 
     conf.setdefault('max_query_size', 10000)
     conf.setdefault('disable_rules_on_error', True)
+    conf.setdefault('rules_in_es', False)
 
     # Convert run_every, buffer_time into a timedelta object
     try:
@@ -382,31 +391,31 @@ def load_rules(args):
         raise EAException('Invalid time format used: %s' % (e))
 
     # Load each rule configuration file
+    names = []
     rules = []
-    rule_files = get_file_paths(conf, use_rule)
-    for rule_file in rule_files:
-        try:
-            rule = load_configuration(rule_file, conf, args)
-            if rule['name'] in names:
-                raise EAException('Duplicate rule named %s' % (rule['name']))
-        except EAException as e:
-            raise EAException('Error loading file %s: %s' % (rule_file, e))
+    if conf['rules_in_es']:
+        es = new_elasticsearch(build_es_conn_config(conf))
+        result = es.search(index=conf['es_metadata_index'],
+                           doc_type='rules',
+                           body={},
+                           size=1000)
+        rules = [load_rule(hit['_source'], conf, args) for hit in result['hits']['hits']]
+    else:
+        rule_files = get_file_paths(conf, args.rule)
+        for rule_file in rule_files:
+            try:
+                rule = load_configuration(rule_file, conf, args)
+                if rule['name'] in names:
+                    raise EAException('Duplicate rule named %s' % (rule['name']))
+            except EAException as e:
+                raise EAException('Error loading file %s: %s' % (rule_file, e))
 
-        rules.append(rule)
-        names.append(rule['name'])
+            rules.append(rule)
+            names.append(rule['name'])
 
-    if not rules:
-        logging.exception('No rules loaded. Exiting')
-        exit(1)
+    # if not rules:
+    #     logging.exception('No rules loaded. Exiting')
+    #     exit(1)
 
     conf['rules'] = rules
     return conf
-
-
-def get_rule_hashes(conf, use_rule=None):
-    rule_files = get_file_paths(conf, use_rule)
-    rule_mod_times = {}
-    for rule_file in rule_files:
-        with open(rule_file) as fh:
-            rule_mod_times[rule_file] = hashlib.sha1(fh.read()).digest()
-    return rule_mod_times

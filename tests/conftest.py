@@ -63,18 +63,17 @@ def ea():
             'alert_time_limit': datetime.timedelta(hours=24),
             'es_host': 'es',
             'es_port': 14900,
-            'writeback_index': 'wb',
+            'es_metadata_index': 'wb',
             'rules': rules,
             'max_query_size': 10000,
             'old_query_limit': datetime.timedelta(weeks=1),
             'disable_rules_on_error': False}
     elasticsearch.client.Elasticsearch = mock_es_client
-    with mock.patch('elastalert.elastalert.get_rule_hashes'):
-        with mock.patch('elastalert.elastalert.load_rules') as load_conf:
-            load_conf.return_value = conf
-            ea = ElastAlerter(['--pin_rules'])
-    ea.rules[0]['type'] = mock_ruletype()
-    ea.rules[0]['alert'] = [mock_alert()]
+    with mock.patch('elastalert.config.load_rules') as load_conf:
+        load_conf.return_value = conf
+        ea = ElastAlerter(['--pin_rules'])
+    ea.rules['anytest']['type'] = mock_ruletype()
+    ea.rules['anytest']['alert'] = [mock_alert()]
     ea.writeback_es = mock_es_client()
     ea.writeback_es.search.return_value = {'hits': {'hits': []}}
     ea.writeback_es.create.return_value = {'_id': 'ABCD'}

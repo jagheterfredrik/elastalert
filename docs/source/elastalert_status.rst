@@ -6,7 +6,7 @@ ElastAlert Metadata Index
 ElastAlert uses Elasticsearch to store various information about its state. This not only allows for some
 level of auditing and debugging of ElastAlert's operation, but also to avoid loss of data or duplication of alerts
 when ElastAlert is shut down, restarted, or crashes. This cluster and index information is defined
-in the global config file with ``es_host``, ``es_port`` and ``writeback_index``. ElastAlert must be able
+in the global config file with ``es_host``, ``es_port`` and ``es_metadata_index``. ElastAlert must be able
 to write to this index. The script, ``elastalert-create-index`` will create the index with the correct mapping
 for you, and optionally copy the documents from an existing ElastAlert writeback index. Run it and it will
 prompt you for the cluster information.
@@ -26,7 +26,7 @@ elastalert_status
 - ``matches``: The number of matches that the rule returned after processing the hits. Note that this does not necessarily mean that alerts were triggered.
 - ``time_taken``: The number of seconds it took for this query to run.
 
-``elastalert_status`` is what ElastAlert will use to determine what time range to query when it first starts to avoid duplicating queries. 
+``elastalert_status`` is what ElastAlert will use to determine what time range to query when it first starts to avoid duplicating queries.
 For each rule, it will start querying from the most recent endtime. If ElastAlert is running in debug mode, it will still attempt to base
 its start time by looking for the most recent search performed, but it will not write the results of any query back to Elasticsearch.
 
