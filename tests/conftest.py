@@ -58,6 +58,7 @@ def ea():
               'dt_to_ts': dt_to_ts,
               '_source_enabled': True}]
     conf = {'rules_folder': 'rules',
+            'rules_in_es': False,
             'run_every': datetime.timedelta(minutes=10),
             'buffer_time': datetime.timedelta(minutes=5),
             'alert_time_limit': datetime.timedelta(hours=24),
@@ -69,7 +70,7 @@ def ea():
             'old_query_limit': datetime.timedelta(weeks=1),
             'disable_rules_on_error': False}
     elasticsearch.client.Elasticsearch = mock_es_client
-    with mock.patch('elastalert.config.load_rules') as load_conf:
+    with mock.patch('elastalert.config.load_config') as load_conf:
         load_conf.return_value = conf
         ea = ElastAlerter(['--pin_rules'])
     ea.rules['anytest']['type'] = mock_ruletype()

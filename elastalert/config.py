@@ -80,16 +80,14 @@ def get_module(module_name):
     return module
 
 
-def load_configuration(filename, conf, args=None):
+def load_rule(filename, conf, args=None):
     try:
-        rule = yaml_loader(filename)
+        return yaml_loader(filename)
     except yaml.YAMLError as e:
         raise EAException('Could not parse file %s: %s' % (filename, e))
 
-    return load_rule(rule, conf, args)
 
-
-def load_rule(rule, conf, args=None):
+def init_rule(rule, conf, args=None):
     """ Load a yaml rule file and fill in the relevant fields with objects.
 
     :param filename: The name of a rule configuration file.
@@ -353,7 +351,7 @@ def load_alerts(rule, alert_field):
     return alert_field
 
 
-def load_rules(args):
+def load_config(args):
     """ Creates a conf dictionary for ElastAlerter. Loads the global
     config file and then each rule found in rules_folder.
 
@@ -387,6 +385,11 @@ def load_rules(args):
     except (KeyError, TypeError) as e:
         raise EAException('Invalid time format used: %s' % (e))
 
+    conf['rules'] = load_rules(conf, args)
+    return conf
+
+
+def load_rules(conf, args):
     # Load each rule configuration file
     names = []
     rules = []
@@ -396,23 +399,20 @@ def load_rules(args):
                            doc_type='rules',
                            body={},
                            size=1000)
-        rules = [load_rule(hit['_source'], conf, args) for hit in result['hits']['hits']]
+        rule_candidates = [hit['_source']for hit in result['hits']['hits']]
     else:
         rule_files = get_file_paths(conf, args.rule)
-        for rule_file in rule_files:
-            try:
-                rule = load_configuration(rule_file, conf, args)
-                if rule['name'] in names:
-                    raise EAException('Duplicate rule named %s' % (rule['name']))
-            except EAException as e:
-                raise EAException('Error loading file %s: %s' % (rule_file, e))
+        rule_candidates = [load_rule(rule_file, conf, args) for rule_file in rule_files]
 
-            rules.append(rule)
-            names.append(rule['name'])
+    for rule in rule_candidates:
+        try:
+            rule = init_rule(rule, conf, args)
+            if rule['name'] in names:
+                raise EAException('Duplicate rule named %s' % (rule['name']))
+        except EAException as e:
+            raise EAException('Error loading file %s: %s' % (rule_file, e))
 
-    # if not rules:
-    #     logging.exception('No rules loaded. Exiting')
-    #     exit(1)
+        rules.append(rule)
+        names.append(rule['name'])
 
-    conf['rules'] = rules
-    return conf
+    return rules

@@ -50,7 +50,7 @@ class ElastAlerter():
     to rules and alerts. In each rule in conf['rules'], the RuleType and Alerter
     instances live under 'type' and 'alerts', respectively. The conf dictionary
     should not be passed directly from a configuration file, but must be populated
-    by config.py:load_rules instead. """
+    by config.py:load_config instead. """
 
     def parse_args(self, args):
         parser = argparse.ArgumentParser()
@@ -88,7 +88,7 @@ class ElastAlerter():
             tracer.setLevel(logging.INFO)
             tracer.addHandler(logging.FileHandler(self.args.es_debug_trace))
 
-        self.conf = config.load_rules(self.args)
+        self.conf = config.load_config(self.args)
         self.max_query_size = self.conf['max_query_size']
         self.es_metadata_index = self.conf['es_metadata_index']
         self.run_every = self.conf['run_every']
@@ -571,26 +571,26 @@ class ElastAlerter():
         return new_rule
 
     def load_rule_changes(self):
-        candidates = config.load_rules(self.args)['rules']
+        candidates = config.load_rules(self.conf, self.args)
         candidate_names = [c.get('name') for c in candidates]
 
         # Remove old
         removed = set(self.rules.keys()) - set(candidate_names)
         for r in removed:
             del self.rules[r]
-            if r in self.disabled_rules:
-                del self.disabled_rules[r]
+            self.disabled_rules.discard(r)
 
         # Update existing
         def _update_rules(rule):
             if rule['name'] in self.rules:
                 if self.rules[rule['name']]['hash'] != rule['hash']:
                     self.rules[rule['name']] = self.init_rule(rule, False)
-                    if rule['name'] in self.disabled_rules:
-                        del self.disabled_rules[rule['name']]
+                    self.disabled_rules.discard(rule['name'])
+                else:
+                    print 'no change yao'
                 return False
             return True
-
+        print candidates
         candidates = filter(_update_rules, candidates)
 
         # Add new
@@ -638,8 +638,6 @@ class ElastAlerter():
             self.writeback_es = new_elasticsearch(self.es_conn_config)
 
         self.send_pending_alerts()
-
-        print 'run!', len(self.rules)
 
         next_run = datetime.datetime.utcnow() + self.run_every
 
@@ -1192,6 +1190,7 @@ class ElastAlerter():
     def send_notification_email(self, text='', exception=None, rule=None, subject=None, rule_file=None):
         email_body = text
         rule_name = None
+        print rule
         if rule:
             rule_name = rule['name']
         elif rule_file:

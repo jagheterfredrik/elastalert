@@ -25,6 +25,24 @@ END_TIMESTAMP = '2014-09-27T12:34:45Z'
 START = ts_to_dt(START_TIMESTAMP)
 END = ts_to_dt(END_TIMESTAMP)
 
+test_rule = {'es_host': 'test_host',
+             'es_port': 12345,
+             'name': 'testrule',
+             'type': 'spike',
+             'spike_height': 2,
+             'spike_type': 'up',
+             'timeframe': {'minutes': 10},
+             'index': 'test_index',
+             'query_key': 'testkey',
+             'compare_key': 'comparekey',
+             'filter': [{'term': {'key': 'value'}}],
+             'alert': 'email',
+             'use_count_query': True,
+             'doc_type': 'blsh',
+             'email': 'test@test.test',
+             'aggregation': {'hours': 2},
+             'include': ['comparekey', '@timestamp']}
+
 
 def _set_hits(ea_inst, hits):
     res = {'hits': {'hits': hits}}
@@ -68,7 +86,7 @@ def test_starttime(ea):
 def test_init_rule(ea):
     # Simulate state of a rule just loaded from a file
     ea.rules['anytest']['minimum_starttime'] = datetime.datetime.now()
-    new_rule = copy.copy(ea.rules['anytest'])
+    new_rule = copy.deepcopy(ea.rules['anytest'])
     map(new_rule.pop, ['agg_matches', 'current_aggregate_id', 'processed_hits', 'minimum_starttime'])
 
     # Properties are copied from ea.rules['anytest']
@@ -693,39 +711,94 @@ def test_kibana_dashboard(ea):
 
 
 def test_rule_changes(ea):
-    ea.rules = [ea.init_rule(rule, True) for rule in [{'rule_file': 'rules/rule1.yaml', 'name': 'rule1', 'filter': []},
-                                                      {'rule_file': 'rules/rule2.yaml', 'name': 'rule2', 'filter': []}]]
-    ea.rules[1]['processed_hits'] = ['save me']
+    # Default state
+    assert ea.rules.keys() == ['anytest']
 
-    with mock.patch('elastalert.config.load_configuration') as mock_load:
-        mock_load.side_effect = [{'filter': [], 'name': 'rule2', 'rule_file': 'rules/rule2.yaml'},
-                                 {'filter': [], 'name': 'rule3', 'rule_file': 'rules/rule3.yaml'}]
-        ea.load_rule_changes()
+    # Change to three new rules
+    rule1 = copy.deepcopy(test_rule)
+    rule1['name'] = 'rule1'
+    rule2 = copy.deepcopy(test_rule)
+    rule2['name'] = 'rule2'
+    rule3 = copy.deepcopy(test_rule)
+    rule3['name'] = 'rule3'
+
+    with mock.patch('elastalert.config.yaml_loader') as mock_open:
+        mock_open.side_effect = [rule1, rule2, rule3]
+
+        with mock.patch('os.listdir') as mock_ls:
+            mock_ls.return_value = ['rule1.yaml', 'rule2.yaml', 'rule3.yaml']
+            ea.load_rule_changes()
+
+    assert len(ea.rules) == 3
+    assert 'anytest' not in ea.rules
+    for k, v in ea.rules.iteritems():
+        assert 'test' not in v
+
+    ea.rules['rule2']['processed_hits'] = ['save me']
+
+    # Same rules but with additional field
+    rule1 = copy.deepcopy(test_rule)
+    rule1['name'] = 'rule1'
+    rule1['test'] = 'test'
+    rule2 = copy.deepcopy(test_rule)
+    rule2['name'] = 'rule2'
+    rule2['test'] = 'test'
+    rule3 = copy.deepcopy(test_rule)
+    rule3['name'] = 'rule3'
+    rule3['test'] = 'test'
+
+    with mock.patch('elastalert.config.yaml_loader') as mock_open:
+        mock_open.side_effect = [rule1, rule2, rule3]
+
+        with mock.patch('os.listdir') as mock_ls:
+            mock_ls.return_value = ['rule1.yaml', 'rule2.yaml', 'rule3.yaml']
+            ea.load_rule_changes()
 
     # All 3 rules still exist
-    assert ea.rules['anytest']['name'] == 'rule1'
-    assert ea.rules[1]['name'] == 'rule2'
-    assert ea.rules[1]['processed_hits'] == ['save me']
-    assert ea.rules[2]['name'] == 'rule3'
+    assert ea.rules['rule1']['name'] == 'rule1'
+    assert ea.rules['rule2']['name'] == 'rule2'
+    assert ea.rules['rule2']['processed_hits'] == ['save me']
+    assert ea.rules['rule3']['name'] == 'rule3'
 
     # Assert 2 and 3 were reloaded
-    assert mock_load.call_count == 2
-    mock_load.assert_any_call('rules/rule2.yaml', ea.conf)
-    mock_load.assert_any_call('rules/rule3.yaml', ea.conf)
+    for k, v in ea.rules.iteritems():
+        print v
+        assert 'test' in v
+
+    # Same rules again
+    rule1 = copy.deepcopy(test_rule)
+    rule1['name'] = 'rule1'
+    rule2 = copy.deepcopy(test_rule)
+    rule2['name'] = 'rule2'
+    rule3 = copy.deepcopy(test_rule)
+    rule3['name'] = 'rule2'
 
     # A new rule with a conflicting name wont load
-    with mock.patch('elastalert.config.load_configuration') as mock_load:
-        with mock.patch.object(ea, 'send_notification_email') as mock_send:
-            mock_load.return_value = {'filter': [], 'name': 'rule3', 'new': 'stuff', 'rule_file': 'rules/rule4.yaml'}
-            ea.load_rule_changes()
-            mock_send.assert_called_once_with(exception=mock.ANY, rule_file='rules/rule4.yaml')
+    with mock.patch('elastalert.config.yaml_loader') as mock_open:
+        with mock.patch('os.listdir') as mock_ls:
+            mock_ls.return_value = ['rule1.yaml', 'rule2.yaml', 'rule3.yaml']
+            mock_open.side_effect = [rule1, rule2, rule3]
+            with pytest.raises(EAException):
+                ea.load_rule_changes()
+
     assert len(ea.rules) == 3
     assert not any(['new' in rule for rule in ea.rules])
 
     # An old rule which didn't load gets reloaded
-    with mock.patch('elastalert.config.load_configuration') as mock_load:
-        mock_load.return_value = {'filter': [], 'name': 'rule4', 'new': 'stuff', 'rule_file': 'rules/rule4.yaml'}
-        ea.load_rule_changes()
+    rule1 = copy.deepcopy(test_rule)
+    rule1['name'] = 'rule1'
+    rule2 = copy.deepcopy(test_rule)
+    rule2['name'] = 'rule2'
+    rule3 = copy.deepcopy(test_rule)
+    rule3['name'] = 'rule3'
+    rule4 = copy.deepcopy(test_rule)
+    rule4['name'] = 'rule4'
+
+    with mock.patch('elastalert.config.yaml_loader') as mock_open:
+        with mock.patch('os.listdir') as mock_ls:
+            mock_ls.return_value = ['rule1.yaml', 'rule2.yaml', 'rule3.yaml', 'rule4.yaml']
+            mock_open.side_effect = [rule1, rule2, rule3, rule4]
+            ea.load_rule_changes()
     assert len(ea.rules) == 4
 
 
@@ -851,30 +924,62 @@ def test_notify_email(ea):
 def test_uncaught_exceptions(ea):
     e = Exception("Errors yo!")
 
+    rule1 = copy.deepcopy(test_rule)
+    rule1['name'] = 'rule1'
+
+    with mock.patch('elastalert.config.yaml_loader') as mock_open:
+        mock_open.side_effect = [rule1]
+
+        with mock.patch('os.listdir') as mock_ls:
+            mock_ls.return_value = ['rule1.yaml']
+            ea.load_rule_changes()
+
     # With disabling set to false
     ea.disable_rules_on_error = False
-    ea.handle_uncaught_exception(e, ea.rules['anytest'])
+    ea.handle_uncaught_exception(e, ea.rules['rule1'])
     assert len(ea.rules) == 1
     assert len(ea.disabled_rules) == 0
 
+    with mock.patch.object(ea, 'run_rule') as mock_run_rule:
+        mock_run_rule.return_value = 0
+        try:
+            ea.run_all_rules()
+        except:
+            pass
+        assert mock_run_rule.called
+
     # With disabling set to true
     ea.disable_rules_on_error = True
-    ea.handle_uncaught_exception(e, ea.rules['anytest'])
-    assert len(ea.rules) == 0
+    ea.handle_uncaught_exception(e, ea.rules['rule1'])
+    assert len(ea.rules) == 1
     assert len(ea.disabled_rules) == 1
+    assert 'rule1' in ea.disabled_rules
+    assert ea.rules.keys() == ['rule1']
+
+    with mock.patch.object(ea, 'run_rule') as mock_run_rule:
+        ea.run_all_rules()
+        assert not mock_run_rule.called
 
     # Changing the file should re-enable it
-    with mock.patch('elastalert.config.load_configuration') as mock_load:
-        mock_load.side_effect = [ea.disabled_rules[0]]
-        ea.load_rule_changes()
+    rule1 = copy.deepcopy(test_rule)
+    rule1['name'] = 'rule1'
+    rule1['new'] = True
+
+    with mock.patch('elastalert.config.yaml_loader') as mock_open:
+        mock_open.side_effect = [rule1]
+
+        with mock.patch('os.listdir') as mock_ls:
+            mock_ls.return_value = ['rule1.yaml']
+            ea.load_rule_changes()
+
     assert len(ea.rules) == 1
     assert len(ea.disabled_rules) == 0
 
     # Notify email is sent
     ea.notify_email = 'qlo@example.com'
     with mock.patch.object(ea, 'send_notification_email') as mock_email:
-        ea.handle_uncaught_exception(e, ea.rules['anytest'])
-    assert mock_email.call_args_list[0][1] == {'exception': e, 'rule': ea.disabled_rules[0]}
+        ea.handle_uncaught_exception(e, ea.rules['rule1'])
+    assert mock_email.call_args_list[0][1] == {'exception': e, 'rule': ea.rules[list(ea.disabled_rules)[0]]}
 
 
 def test_get_top_counts_handles_no_hits_returned(ea):
