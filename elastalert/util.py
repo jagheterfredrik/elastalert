@@ -78,13 +78,13 @@ def dict_hash(d):
 
     if type(d) is dict:
         for k, v in d.items():
-            res ^= hash(k)
-            res ^= dict_hash(v)
+            res += hash(k)
+            res += dict_hash(v)
     elif type(d) is list:
         for v in d:
-            res ^= dict_hash(v)
+            res += dict_hash(v)
     else:
-        res ^= hash(d)
+        res += hash(d)
 
     return res
 

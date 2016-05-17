@@ -231,7 +231,7 @@ class MockElastAlerter(object):
 
         # Instantiate ElastAlert to use mock config and special rule
         with mock.patch('elastalert.config.load_config') as load_config:
-            with mock.patch('elastalert.config.load_rules') as load_rules:
+            with mock.patch('elastalert.config.load_config') as load_rules:
                 load_config.return_value = conf
                 load_rules.return_value = [rule]
                 if args.alert:
