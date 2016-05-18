@@ -28,7 +28,7 @@ from util import new_elasticsearch
 rule_schema = jsonschema.Draft4Validator(yaml.load(open(os.path.join(os.path.dirname(__file__), 'schema.yaml'))))
 
 # Required global (config.yaml) and local (rule.yaml)  configuration options
-required_globals = frozenset(['run_every', 'es_host', 'es_port', 'es_metadata_index', 'buffer_time'])
+required_globals = frozenset(['run_every', 'es_host', 'es_port', 'writeback_index', 'buffer_time'])
 required_locals = frozenset(['alert', 'type', 'name', 'index'])
 
 # Used to map the names of rules to their classes
@@ -398,7 +398,7 @@ def load_rules(conf, args):
     rules = []
     if conf['rules_in_es']:
         es = new_elasticsearch(build_es_conn_config(conf))
-        result = es.search(index=conf['es_metadata_index'],
+        result = es.search(index=conf['writeback_index'],
                            doc_type='rules',
                            body={},
                            size=1000)
