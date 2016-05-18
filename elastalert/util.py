@@ -74,19 +74,7 @@ def build_es_conn_config(conf):
 
 
 def dict_hash(d):
-    res = 0
-
-    if type(d) is dict:
-        for k, v in d.items():
-            res += hash(k)
-            res += dict_hash(v)
-    elif type(d) is list:
-        for v in d:
-            res += dict_hash(v)
-    else:
-        res += hash(d)
-
-    return res
+    return hash(repr(sorted(d.items())))
 
 
 def new_get_event_ts(ts_field):

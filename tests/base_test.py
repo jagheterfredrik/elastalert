@@ -802,6 +802,137 @@ def test_rule_changes(ea):
     assert len(ea.rules) == 4
 
 
+es_response = {
+    u'took': 3,
+    u'timed_out': False,
+    u'_shards':
+    {
+        u'failed': 0,
+        u'successful': 5,
+        u'total': 5
+    },
+    u'hits':
+    {
+        u'hits': [
+        ],
+        u'max_score': 1.0,
+        u'total': 1337
+    }
+}
+
+
+es_hit_wrapper = {
+    u'_score': 1.0,
+    u'_id': u'50m31d15g0ingh3r3',
+    u'_source': {},
+    u'_index': u'wb',
+    u'_type': u'rules'
+}
+
+
+def make_es_response(rules):
+    resp = copy.deepcopy(es_response)
+
+    wraps = []
+    for rule in rules:
+        wrap = copy.deepcopy(es_hit_wrapper)
+        wrap['_source'] = rule
+        wraps.append(wrap)
+
+    resp['hits']['hits'] = wraps
+    resp['hits']['total'] = len(wraps)
+
+    return resp
+
+
+def test_rule_changes_es(ea):
+    ea.conf['rules_in_es'] = True
+    mock_es = mock.Mock()
+
+    with mock.patch('elastalert.util.Elasticsearch') as mock_es_init:
+        mock_es_init.return_value = mock_es
+
+        assert ea.rules.keys() == ['anytest']
+
+        # Change to three new rules
+        rule1 = copy.deepcopy(test_rule)
+        rule1['name'] = 'rule1'
+        rule2 = copy.deepcopy(test_rule)
+        rule2['name'] = 'rule2'
+        rule3 = copy.deepcopy(test_rule)
+        rule3['name'] = 'rule3'
+
+        mock_es.search.return_value = make_es_response([rule1, rule2, rule3])
+
+        ea.load_rule_changes()
+
+        assert len(ea.rules) == 3
+        assert 'anytest' not in ea.rules
+        for k, v in ea.rules.iteritems():
+            assert 'test' not in v
+
+        ea.rules['rule2']['processed_hits'] = ['save me']
+
+        # Same rules but with additional field
+        rule1 = copy.deepcopy(test_rule)
+        rule1['name'] = 'rule1'
+        rule1['test'] = 'test'
+        rule2 = copy.deepcopy(test_rule)
+        rule2['name'] = 'rule2'
+        rule2['test'] = 'test'
+        rule3 = copy.deepcopy(test_rule)
+        rule3['name'] = 'rule3'
+        rule3['test'] = 'test'
+
+        mock_es.search.return_value = make_es_response([rule1, rule2, rule3])
+
+        ea.load_rule_changes()
+
+        # All 3 rules still exist
+        assert ea.rules['rule1']['name'] == 'rule1'
+        assert ea.rules['rule2']['name'] == 'rule2'
+        assert ea.rules['rule2']['processed_hits'] == ['save me']
+        assert ea.rules['rule3']['name'] == 'rule3'
+
+        # Assert 2 and 3 were reloaded
+        for k, v in ea.rules.iteritems():
+            print v
+            assert 'test' in v
+
+        # Same rules again
+        rule1 = copy.deepcopy(test_rule)
+        rule1['name'] = 'rule1'
+        rule2 = copy.deepcopy(test_rule)
+        rule2['name'] = 'rule2'
+        rule3 = copy.deepcopy(test_rule)
+        rule3['name'] = 'rule2'
+
+        mock_es.search.return_value = make_es_response([rule1, rule2, rule3])
+
+        # A new rule with a conflicting name wont load
+        with pytest.raises(EAException):
+            ea.load_rule_changes()
+
+        assert len(ea.rules) == 3
+        assert not any(['new' in rule for rule in ea.rules])
+
+        # An old rule which didn't load gets reloaded
+        rule1 = copy.deepcopy(test_rule)
+        rule1['name'] = 'rule1'
+        rule2 = copy.deepcopy(test_rule)
+        rule2['name'] = 'rule2'
+        rule3 = copy.deepcopy(test_rule)
+        rule3['name'] = 'rule3'
+        rule4 = copy.deepcopy(test_rule)
+        rule4['name'] = 'rule4'
+
+        mock_es.search.return_value = make_es_response([rule1, rule2, rule3, rule4])
+
+        ea.load_rule_changes()
+
+        assert len(ea.rules) == 4
+
+
 def test_strf_index(ea):
     """ Test that the get_index function properly generates indexes spanning days """
     ea.rules['anytest']['index'] = 'logstash-%Y.%m.%d'
