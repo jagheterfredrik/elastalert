@@ -402,18 +402,19 @@ def load_rules(conf, args):
                            doc_type='rules',
                            body={},
                            size=1000)
+        print result
         rule_candidates = [hit['_source']for hit in result['hits']['hits']]
     else:
         rule_files = get_file_paths(conf, args.rule)
-        rule_candidates = [load_rule(rule_file, conf, args) for rule_file in rule_files]
-
-    for rule in rule_candidates:
         try:
-            rule = init_rule(rule, conf, args)
-            if rule['name'] in names:
-                raise EAException('Duplicate rule named %s' % (rule['name']))
+            rule_candidates = [load_rule(rule_file, conf, args) for rule_file in rule_files]
         except EAException as e:
             raise EAException('Error loading file %s: %s' % (rule_file, e))
+
+    for rule in rule_candidates:
+        rule = init_rule(rule, conf, args)
+        if rule['name'] in names:
+            raise EAException('Duplicate rule named %s' % (rule['name']))
 
         rules.append(rule)
         names.append(rule['name'])
