@@ -357,7 +357,7 @@ def test_agg_no_writeback_connectivity(ea):
                                            {'@timestamp': hit2},
                                            {'@timestamp': hit3}]
     ea.writeback_es.create.side_effect = elasticsearch.exceptions.ElasticsearchException('Nope')
-    with mock.patch('elastalert.elastalert.Elasticsearch'):
+    with mock.patch('elastalert.util.Elasticsearch'):
         with mock.patch.object(ea, 'find_pending_aggregate_alert', return_value=None):
             ea.run_rule(ea.rules['anytest'], END, START)
 

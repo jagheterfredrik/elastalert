@@ -64,7 +64,7 @@ def ea():
             'alert_time_limit': datetime.timedelta(hours=24),
             'es_host': 'es',
             'es_port': 14900,
-            'es_metadata_index': 'wb',
+            'writeback_index': 'wb',
             'rules': rules,
             'max_query_size': 10000,
             'old_query_limit': datetime.timedelta(weeks=1),
