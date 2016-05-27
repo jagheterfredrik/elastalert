@@ -399,7 +399,6 @@ def load_rules(conf, args):
                            doc_type='rules',
                            body={},
                            size=1000)
-        print result
         rule_candidates = [hit['_source']for hit in result['hits']['hits']]
     else:
         rule_files = get_file_paths(conf, args.rule)

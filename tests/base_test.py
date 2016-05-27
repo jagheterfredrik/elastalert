@@ -762,7 +762,6 @@ def test_rule_changes(ea):
 
     # Assert 2 and 3 were reloaded
     for k, v in ea.rules.iteritems():
-        print v
         assert 'test' in v
 
     # Same rules again
@@ -896,7 +895,6 @@ def test_rule_changes_es(ea):
 
         # Assert 2 and 3 were reloaded
         for k, v in ea.rules.iteritems():
-            print v
             assert 'test' in v
 
         # Same rules again

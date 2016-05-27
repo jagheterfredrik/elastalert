@@ -586,11 +586,8 @@ class ElastAlerter():
                 if self.rules[rule['name']]['hash'] != rule['hash']:
                     self.rules[rule['name']] = self.init_rule(rule, False)
                     self.disabled_rules.discard(rule['name'])
-                else:
-                    print 'no change yao'
                 return False
             return True
-        print candidates
         candidates = filter(_update_rules, candidates)
 
         # Add new
@@ -1190,7 +1187,6 @@ class ElastAlerter():
     def send_notification_email(self, text='', exception=None, rule=None, subject=None, rule_file=None):
         email_body = text
         rule_name = None
-        print rule
         if rule:
             rule_name = rule['name']
         elif rule_file:
