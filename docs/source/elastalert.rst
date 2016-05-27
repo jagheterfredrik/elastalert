@@ -124,6 +124,8 @@ even if ElastAlert is stopped and restarted, it will never miss data or look at 
 files in this folder, and all subdirectories, that end in .yaml. If the contents of this folder change, ElastAlert will load, reload
 or remove rules based on their respective config files.
 
+``rules_in_es``: If set to true, ElastAlert will read rules from the ``writeback_index`` instead of reading files from the ``rules_folder``. If the content of this index changes, ElastAlert will load, reload or remove rules based on their state in Elasticsearch.
+
 ``run_every``: How often ElastAlert should query Elasticsearch. ElastAlert will remember the last time
 it ran the query for a given rule, and periodically query from that time until the present. The format of
 this field is a nested unit of time, such as ``minutes: 5``. This is how time is defined in every ElastAlert

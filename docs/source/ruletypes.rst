@@ -36,7 +36,7 @@ Rule Configuration Cheat Sheet
 +--------------------------------------------------------------+           |
 | ``es_password`` (string, no default)                         |           |
 +--------------------------------------------------------------+           |
-| ``es_url_prefix`` (string, no default)                         |           |
+| ``es_url_prefix`` (string, no default)                       |           |
 +--------------------------------------------------------------+           |
 | ``es_send_get_body_as`` (string, default "GET")              |           |
 +--------------------------------------------------------------+           |
@@ -215,7 +215,7 @@ es_url_prefix
 ``es_url_prefix``: URL prefix for the Elasticsearch endpoint. (Optional, string, no default)
 
 es_send_get_body_as
-^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^
 
 ``es_send_get_body_as``: Method for querying Elasticsearch. (Optional, string, default "GET")
 
@@ -810,7 +810,7 @@ than regular searching if there is a large number of documents. If this is used,
 that if a new term appears but there are at least 50 terms which appear more frequently, it will not be found.
 
 Cardinality
-~~~~~~~~
+~~~~~~~~~~~
 
 ``cardinality``: This rule matches when a the total number of unique values for a certain field within a time frame is higher or lower
 than a threshold.
@@ -1144,7 +1144,7 @@ Elastalert rule. Any Apple emoji can be used, see http://emojipedia.org/apple/
 ``slack_proxy``: By default Elastalert will not use a network proxy to send notifications to Slack. Set this option using ``hostname:port`` if you need to use a proxy.
 
 Telegram
-~~~~~
+~~~~~~~~
 Telegram alerter will send a notification to a predefined Telegram username or channel. The body of the notification is formatted the same as with other alerters.
 
 The alerter requires the following two options:
